@@ -21,7 +21,7 @@ impl Nash {
     fn new() -> Result<Self> {
         let rec = Self::fill_cache();
         Ok(Self {
-            term: Term::with_height(TermHeight::Percent(30))?,
+            term: Term::with_height(TermHeight::Percent(100))?,
             row: 0,
             col: 9,
             buffer: String::new(),
@@ -60,7 +60,19 @@ impl Nash {
     }
 
     // Ui stuff
-    fn raw_print(&mut self, row: usize, col: usize, msg: &str, color: Color) -> Result<()> {
+    fn need_scrolldown(&mut self) -> Result<bool> {
+        let (_, height) = self.term.term_size()?;
+        if self.row as f32 >= height as f32 * 0.98 {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    fn raw_print(&mut self, mut row: usize, col: usize, msg: &str, color: Color) -> Result<()> {
+        if self.need_scrolldown()? {
+            self.term.clear()?;
+            row = 0;
+            self.row = 1;
+        };
         self.term.print_with_attr(
             row,
             col,
@@ -104,6 +116,13 @@ impl Nash {
     }
 
     fn clear_line(&mut self) -> Result<()> {
+        self.raw_print(
+            self.row,
+            self.col,
+            &std::iter::repeat(" ").take(100).collect::<String>(),
+            Color::BLUE,
+        )?;
+
         self.term.print_with_attr(
             self.row,
             0,
@@ -113,38 +132,43 @@ impl Nash {
                 ..Default::default()
             },
         )?;
-        for col in self.col + 1..100 {
-            self.term.put_cell(self.row, col, Cell::empty())?;
-        }
+
         Ok(())
     }
 
     // cmd stuff
 
     fn run_cmd(&mut self) -> Result<()> {
-        let mut cmd_iter = self.buffer.trim().split_whitespace();
+        self.clear_line()?;
 
+        let mut cmd_iter = self.buffer.trim().split_whitespace();
+        let mut row_n = 1;
         let cmd = cmd_iter.next();
 
-        let (output, row_n) = if let Some(cmd) = cmd {
-            (
-                String::from_utf8_lossy(
-                    &Command::new(cmd)
-                        .args(&cmd_iter.collect::<Vec<&str>>())
-                        .output()?
-                        .stdout,
-                )
-                .to_string(),
-                2,
-            )
+        let output = if let Some(cmd) = cmd {
+            let out = &Command::new(cmd)
+                .args(&cmd_iter.collect::<Vec<&str>>())
+                .output()?;
+            let out = if !out.stdout.is_empty() {
+                &out.stdout
+            } else {
+                &out.stderr
+            };
+            String::from_utf8_lossy(out).to_string()
         } else {
-            ("".to_string(), 1)
+            "".to_string()
         };
 
-        self.raw_print(self.row + 1, 0, &output, Color::MAGENTA)?;
+        for c in output.split('\n') {
+            self.raw_print(self.row + row_n, 0, &c, Color::MAGENTA)?;
+            row_n += 1;
+        }
+
         self.buffer.clear();
         self.col = 9;
-        self.row += row_n;
+        if row_n != 0 {
+            self.row += row_n - 1;
+        }
         self.clear_line()?;
         self.term.present()?;
         Ok(())
@@ -175,10 +199,14 @@ impl Nash {
     }
 
     fn find_suggestions(&mut self) {
+        let search = match self.buffer.split_whitespace().last() {
+            Some(s) => s,
+            None => return,
+        };
         self.cur_sugs = self
             .sugg_cache
             .iter()
-            .filter(|s| s.starts_with(&self.buffer))
+            .filter(|s| s.starts_with(search))
             .cloned()
             .collect();
         if self.cur_sugs.is_empty() && self.get_more_sugs() {
@@ -200,7 +228,7 @@ impl Nash {
         self.print_msg_at(
             self.row,
             self.col,
-            &sug[self.buffer.len()..],
+            &sug[self.buffer.split_whitespace().last().unwrap().len()..],
             Color::LIGHT_BLUE,
         )?;
         Ok(())
@@ -216,10 +244,22 @@ impl Nash {
                 self.sug_idx = 0;
             }
         }
+        //dbg!(&self.cur_sugs);
         if self.cur_sugs.is_empty() {
             return Ok(());
         }
-        self.print_suggesstions(&self.cur_sugs[self.sug_idx].clone())?;
+        if self.cur_sugs.len() == 1 {
+            for c in self.cur_sugs[0].clone()
+                [self.buffer.split_whitespace().last().unwrap().len()..]
+                .chars()
+            {
+                self.handle_key(c)?;
+            }
+            self.handle_key(' ')?;
+        } else {
+            self.print_suggesstions(&self.cur_sugs[self.sug_idx].clone())?;
+        }
+
         Ok(())
     }
 
