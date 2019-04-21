@@ -122,16 +122,29 @@ impl Nash {
     // cmd stuff
 
     fn run_cmd(&mut self) -> Result<()> {
-        let output = Command::new(&self.buffer).output()?.stdout;
-        self.raw_print(
-            self.row + 1,
-            0,
-            &String::from_utf8_lossy(&output),
-            Color::MAGENTA,
-        )?;
+        let mut cmd_iter = self.buffer.trim().split_whitespace();
+
+        let cmd = cmd_iter.next();
+
+        let (output, row_n) = if let Some(cmd) = cmd {
+            (
+                String::from_utf8_lossy(
+                    &Command::new(cmd)
+                        .args(&cmd_iter.collect::<Vec<&str>>())
+                        .output()?
+                        .stdout,
+                )
+                .to_string(),
+                2,
+            )
+        } else {
+            ("".to_string(), 1)
+        };
+
+        self.raw_print(self.row + 1, 0, &output, Color::MAGENTA)?;
         self.buffer.clear();
         self.col = 9;
-        self.row += 2;
+        self.row += row_n;
         self.clear_line()?;
         self.term.present()?;
         Ok(())
